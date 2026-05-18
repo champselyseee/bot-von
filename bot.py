@@ -75,7 +75,7 @@ def fmt_dt(ts: int) -> str:
 
 
 def links_text(sub_id: str, expires_at: int, plan_name: str) -> str:
-    setup_url = f"http://{VPN_DOMAIN}/setup/{sub_id}"
+    setup_url = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/setup/{sub_id}"
     sub_url   = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/sub/{sub_id}"
     return (
         f"✅ <b>VPN подключение активно</b>\n"
