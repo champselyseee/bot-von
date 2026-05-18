@@ -122,17 +122,17 @@ def confirm_payment(yoo_id: str):
     """
     Idempotent: atomically marks the payment confirmed and returns (user_id, plan).
     Returns None if already confirmed or not found.
-    Uses rowcount to detect the winner in concurrent calls.
+    SELECT is done before commit so the row is still visible in the same transaction.
     """
     with _db() as con:
         cur = con.execute(
             "UPDATE payments SET confirmed=1 WHERE yoo_id=? AND confirmed=0",
             (yoo_id,)
         )
-        con.commit()
         if cur.rowcount == 0:
             return None
         row = con.execute(
             "SELECT user_id, plan FROM payments WHERE yoo_id=?", (yoo_id,)
         ).fetchone()
+        con.commit()
         return (row["user_id"], row["plan"]) if row else None

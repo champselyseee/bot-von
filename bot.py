@@ -5,6 +5,7 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 import aiohttp
 from aiohttp import web
@@ -27,7 +28,7 @@ from db import (
     set_vpn_expiry,
     upsert_vpn_client,
 )
-from xui import XUIClient
+from vpn_api import VPNApiClient
 
 load_dotenv()
 
@@ -39,18 +40,16 @@ logger = logging.getLogger(__name__)
 
 # ─── Config ────────────────────────────────────────────────────────────────
 
-BOT_TOKEN       = os.environ["BOT_TOKEN"]
-XUI_URL         = os.environ["XUI_URL"]          # e.g. http://78.40.117.96:54321/2298a2bf9987b044
-XUI_USERNAME    = os.environ.get("XUI_USERNAME", "admin")
-XUI_PASSWORD    = os.environ.get("XUI_PASSWORD", "admin123")
-XUI_HY2_INBOUND = int(os.environ.get("XUI_HY2_INBOUND_ID", "1"))
-VPN_DOMAIN      = os.environ.get("VPN_DOMAIN", "camavali.duckdns.org")
-VPN_SUB_PORT    = os.environ.get("VPN_SUB_PORT", "2097")
-YOO_SHOP_ID     = os.environ.get("YOOMONEY_SHOP_ID", "")
-YOO_SECRET      = os.environ.get("YOOMONEY_SECRET_KEY", "")
-PORT            = int(os.environ.get("PORT", "8080"))
-PRICE_2W        = int(os.environ.get("PRICE_2W", "149"))
-PRICE_1M        = int(os.environ.get("PRICE_1M", "249"))
+BOT_TOKEN    = os.environ["BOT_TOKEN"]
+VPN_API_URL  = os.environ["VPN_API_URL"]   # http://78.40.117.96:8765
+VPN_API_KEY  = os.environ["VPN_API_KEY"]
+VPN_DOMAIN   = os.environ.get("VPN_DOMAIN", "camavali.duckdns.org")
+VPN_SUB_PORT = os.environ.get("VPN_SUB_PORT", "2097")
+YOO_SHOP_ID  = os.environ.get("YOOMONEY_SHOP_ID", "")
+YOO_SECRET   = os.environ.get("YOOMONEY_SECRET_KEY", "")
+PORT         = int(os.environ.get("PORT", "8080"))
+PRICE_2W     = int(os.environ.get("PRICE_2W", "149"))
+PRICE_1M     = int(os.environ.get("PRICE_1M", "249"))
 
 TRIAL_SECS   = 86_400
 PLAN_2W_SECS = 14 * 86_400
@@ -63,10 +62,10 @@ PLAN_MAP = {
 
 MSK = timezone(timedelta(hours=3))
 
-xui = XUIClient(XUI_URL, XUI_USERNAME, XUI_PASSWORD)
+vpn = VPNApiClient(VPN_API_URL, VPN_API_KEY)
 
 # Set in main() after Application is built; used by the webhook handler
-_app_bot: Bot | None = None
+_app_bot: Optional[Bot] = None
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
@@ -124,65 +123,37 @@ def back_button(cb: str = "back_main") -> InlineKeyboardMarkup:
 
 # ─── VPN client management ─────────────────────────────────────────────────
 
-def _build_client_obj(
-    client_uuid: str, email: str, password: str,
-    sub_id: str, expires_at: int, user_id: int,
-) -> dict:
-    return {
-        "id":         client_uuid,
-        "email":      email,
-        "password":   password,
-        "subId":      sub_id,
-        "expiryTime": expires_at * 1000,   # 3x-ui expects milliseconds
-        "enable":     True,
-        "limitIp":    0,
-        "totalGB":    0,
-        "tgId":       str(user_id),
-        "comment":    "",
-    }
-
-
 async def create_or_extend_vpn_client(user_id: int, extra_seconds: int) -> tuple[str, int]:
     """
-    Creates a new 3x-ui client or extends the expiry of an existing one.
+    Creates a new VPN client or extends an existing one.
+    Calls vpn-api.py on the server, then updates local DB.
     Returns (sub_id, expires_at_unix).
-    3x-ui is always updated before the local DB.
     """
     existing = get_vpn_client(user_id)
     now = int(time.time())
 
     if existing:
-        current_exp = max(existing["expires_at"], now)
-        new_exp = current_exp + extra_seconds
-        client = _build_client_obj(
-            existing["client_uuid"], existing["email"], existing["password"],
-            existing["sub_id"], new_exp, user_id,
-        )
-        await xui.update_client(existing["inbound_id"], existing["client_uuid"], client)
+        new_exp     = max(existing["expires_at"], now) + extra_seconds
+        expires_ms  = new_exp * 1000
+        await vpn.update_client(existing["email"], expires_ms)
         set_vpn_expiry(user_id, new_exp)
         return existing["sub_id"], new_exp
     else:
-        client_uuid = str(uuid.uuid4())
-        email       = f"tg_{user_id}"
-        sub_id      = secrets.token_hex(8)
-        password    = secrets.token_urlsafe(24)
-        expires_at  = now + extra_seconds
-        client = _build_client_obj(client_uuid, email, password, sub_id, expires_at, user_id)
+        email      = f"tg_{user_id}"
+        sub_id     = secrets.token_hex(8)
+        password   = secrets.token_urlsafe(24)
+        expires_at = now + extra_seconds
+        expires_ms = expires_at * 1000
 
-        await xui.add_client(XUI_HY2_INBOUND, client)
+        await vpn.add_client(email, password, sub_id, expires_ms)
 
-        # DB write after xui — if this fails, the 3x-ui client is orphaned.
-        # On next attempt a conflict on email will occur in 3x-ui; the user
-        # should contact support. Logged prominently for manual cleanup.
         try:
-            upsert_vpn_client(
-                user_id, client_uuid, email, sub_id, password, XUI_HY2_INBOUND, expires_at
-            )
+            upsert_vpn_client(user_id, str(uuid.uuid4()), email, sub_id, password, 0, expires_at)
         except Exception as db_err:
             logger.critical(
-                "DB write failed after xui.add_client — orphaned client! "
-                "user_id=%s client_uuid=%s email=%s — %s",
-                user_id, client_uuid, email, db_err,
+                "DB write failed after vpn-api.add_client — orphaned server client! "
+                "user_id=%s email=%s sub_id=%s — %s",
+                user_id, email, sub_id, db_err,
             )
             raise
 
@@ -398,8 +369,14 @@ async def handle_yoomoney_webhook(request: web.Request) -> web.Response:
     if not user_id or not plan_key or not yoo_id:
         return web.Response(status=200)
 
+    # Extract real amount from webhook body (falls back to 0.0 if missing)
+    try:
+        real_amount = float(obj.get("amount", {}).get("value", 0.0))
+    except (TypeError, ValueError):
+        real_amount = 0.0
+
     # Ensure payment row exists even if bot restarted between payment creation and webhook
-    save_payment(yoo_id, user_id, plan_key, 0.0)
+    save_payment(yoo_id, user_id, plan_key, real_amount)
 
     # Idempotency guard — process each payment exactly once
     result = confirm_payment(yoo_id)
@@ -475,4 +452,5 @@ async def main():
         await asyncio.Event().wait()
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
