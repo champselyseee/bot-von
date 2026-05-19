@@ -85,7 +85,7 @@ def fmt_dt(ts: int) -> str:
 
 
 def links_text(sub_id: str, expires_at: int, plan_name: str) -> str:
-    sub_url = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/sub/{sub_id}"
+    connect_url = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/connect/{sub_id}"
     return (
         f"✅ <b>VPN подключение активно</b>\n"
         f"📋 Тариф: <b>{plan_name}</b>\n"
@@ -97,15 +97,14 @@ def links_text(sub_id: str, expires_at: int, plan_name: str) -> str:
         f"Переключать вручную ничего не нужно. Всё происходит само.\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<b>📲 Как подключиться:</b>\n\n"
-        f"Нажми кнопку <b>«Добавить в hApp»</b> ниже — откроется страница с инструкцией и кнопкой для автоматической настройки.\n\n"
-        f"Если используешь другое приложение (Streisand, Hiddify, v2rayNG) — добавь ссылку на подписку вручную:\n"
-        f"<code>{sub_url}</code>"
+        f"Нажми кнопку ниже или открой ссылку — автоматически откроется hApp и добавит подписку:\n"
+        f"<code>{connect_url}</code>"
     )
 
 
 def links_keyboard(sub_id: str, extra_rows: list | None = None) -> InlineKeyboardMarkup:
-    setup_url = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/setup/{sub_id}"
-    rows = [[InlineKeyboardButton("📲 Добавить в hApp", url=setup_url)]]
+    connect_url = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/connect/{sub_id}"
+    rows = [[InlineKeyboardButton("📲 Добавить в hApp", url=connect_url)]]
     if extra_rows:
         rows.extend(extra_rows)
     return InlineKeyboardMarkup(rows)
