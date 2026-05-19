@@ -137,18 +137,21 @@ def save_payment(yoo_id: str, user_id: int, plan: str, amount: float):
 
 def confirm_payment(yoo_id: str):
     """
-    Marks payment confirmed (idempotent). Returns (user_id, plan) if confirmed
-    but not yet provisioned — allows webhook retry on failed VPN provisioning.
-    Returns None if already provisioned or payment not found.
+    Marks payment confirmed. Returns (user_id, plan) only if THIS call was the
+    first to flip confirmed=0→1 (rowcount check), preventing double-provisioning
+    when YooKassa retries send two webhooks simultaneously.
+    Returns None if already confirmed by another webhook or payment not found.
     """
     with _db() as con:
-        con.execute(
+        cur = con.execute(
             "UPDATE payments SET confirmed=1 WHERE yoo_id=? AND confirmed=0",
             (yoo_id,)
         )
+        if cur.rowcount == 0:
+            con.commit()
+            return None
         row = con.execute(
-            "SELECT user_id, plan FROM payments "
-            "WHERE yoo_id=? AND confirmed=1 AND provisioned=0",
+            "SELECT user_id, plan FROM payments WHERE yoo_id=?",
             (yoo_id,)
         ).fetchone()
         con.commit()

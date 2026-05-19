@@ -415,6 +415,29 @@ async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── Web server ─────────────────────────────────────────────────────────────
 
+async def _verify_yookassa_payment(yoo_id: str) -> bool:
+    """Confirm payment is real by fetching it from YooKassa API (prevents spoofed webhooks)."""
+    if not YOO_SHOP_ID or not YOO_SECRET:
+        logger.warning("YooKassa credentials not set — skipping webhook verification")
+        return False
+    url = f"https://api.yookassa.ru/v3/payments/{yoo_id}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                auth=aiohttp.BasicAuth(YOO_SHOP_ID, YOO_SECRET),
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning("YooKassa API returned %s for payment %s", resp.status, yoo_id)
+                    return False
+                data = await resp.json(content_type=None)
+                return data.get("status") == "succeeded"
+    except Exception as e:
+        logger.error("YooKassa verification error for %s: %s", yoo_id, e)
+        return False
+
+
 async def handle_yoomoney_webhook(request: web.Request) -> web.Response:
     try:
         body = await request.json()
@@ -427,6 +450,10 @@ async def handle_yoomoney_webhook(request: web.Request) -> web.Response:
     obj  = body.get("object", {})
     meta = obj.get("metadata", {})
     yoo_id = obj.get("id", "")
+
+    if not yoo_id or not await _verify_yookassa_payment(yoo_id):
+        logger.warning("webhook: rejected unverified payment id=%s", yoo_id)
+        return web.Response(status=200)
 
     try:
         user_id = int(meta.get("user_id", 0))
