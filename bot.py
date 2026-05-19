@@ -540,6 +540,7 @@ async def handle_health(request: web.Request) -> web.Response:
 async def run_web():
     app = web.Application()
     app.router.add_post("/yoomoney/webhook", handle_yoomoney_webhook)
+    app.router.add_post("/yukassa/webhook", handle_yoomoney_webhook)
     app.router.add_get("/health", handle_health)
     runner = web.AppRunner(app)
     await runner.setup()
