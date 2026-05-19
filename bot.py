@@ -20,9 +20,11 @@ from telegram.ext import (
 
 from db import (
     confirm_payment,
+    count_active_clients,
     get_or_create_user,
     get_vpn_client,
     init_db,
+    mark_payment_provisioned,
     mark_trial_used,
     save_payment,
     set_vpn_expiry,
@@ -51,6 +53,8 @@ PORT         = int(os.environ.get("PORT", "8080"))
 PRICE_2W     = int(os.environ.get("PRICE_2W", "149"))
 PRICE_1M     = int(os.environ.get("PRICE_1M", "249"))
 
+MAX_CLIENTS  = int(os.environ.get("MAX_CLIENTS", "30"))
+
 TRIAL_SECS   = 86_400
 PLAN_2W_SECS = 14 * 86_400
 PLAN_1M_SECS = 30 * 86_400
@@ -64,6 +68,12 @@ MSK = timezone(timedelta(hours=3))
 
 vpn = VPNApiClient(VPN_API_URL, VPN_API_KEY)
 
+_client_create_lock = asyncio.Lock()
+
+
+class ClientLimitReached(Exception):
+    pass
+
 # Set in main() after Application is built; used by the webhook handler
 _app_bot: Optional[Bot] = None
 
@@ -75,23 +85,30 @@ def fmt_dt(ts: int) -> str:
 
 
 def links_text(sub_id: str, expires_at: int, plan_name: str) -> str:
-    setup_url = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/setup/{sub_id}"
-    sub_url   = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/sub/{sub_id}"
+    sub_url = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/sub/{sub_id}"
     return (
         f"✅ <b>VPN подключение активно</b>\n"
         f"📋 Тариф: <b>{plan_name}</b>\n"
         f"⏰ Действует до: <b>{fmt_dt(expires_at)}</b>\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>📱 Как подключиться (приложение Happ):</b>\n\n"
-        f"1️⃣ Открой эту ссылку в браузере на телефоне:\n"
-        f"<code>{setup_url}</code>\n\n"
-        f"2️⃣ Нажми <b>«Добавить в Happ»</b> — установится профиль маршрутизации "
-        f"(РУ-сайты идут напрямую без VPN)\n\n"
-        f"3️⃣ Нажми <b>«Скопировать ссылку»</b>, вставь в Happ → Subscriptions\n\n"
+        f"<b>📡 Как работает роутинг</b>\n\n"
+        f"Российские сайты — ВКонтакте, Госуслуги, банки, Авито, Яндекс — работают <b>напрямую без VPN</b>: быстро и без задержек.\n\n"
+        f"Заблокированные и зарубежные — Instagram, YouTube, Google, Spotify — идут <b>через VPN</b> автоматически.\n\n"
+        f"Переключать вручную ничего не нужно. Всё происходит само.\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📎 Прямая ссылка на подписку (для других клиентов):\n"
+        f"<b>📲 Как подключиться:</b>\n\n"
+        f"Нажми кнопку <b>«Добавить в hApp»</b> ниже — откроется страница с инструкцией и кнопкой для автоматической настройки.\n\n"
+        f"Если используешь другое приложение (Streisand, Hiddify, v2rayNG) — добавь ссылку на подписку вручную:\n"
         f"<code>{sub_url}</code>"
     )
+
+
+def links_keyboard(sub_id: str, extra_rows: list | None = None) -> InlineKeyboardMarkup:
+    setup_url = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/setup/{sub_id}"
+    rows = [[InlineKeyboardButton("📲 Добавить в hApp", url=setup_url)]]
+    if extra_rows:
+        rows.extend(extra_rows)
+    return InlineKeyboardMarkup(rows)
 
 
 def main_keyboard(trial_used: bool, has_active: bool) -> InlineKeyboardMarkup:
@@ -139,25 +156,29 @@ async def create_or_extend_vpn_client(user_id: int, extra_seconds: int) -> tuple
         set_vpn_expiry(user_id, new_exp)
         return existing["sub_id"], new_exp
     else:
-        email      = f"tg_{user_id}"
-        sub_id     = secrets.token_hex(8)
-        password   = secrets.token_urlsafe(24)
-        expires_at = now + extra_seconds
-        expires_ms = expires_at * 1000
+        async with _client_create_lock:
+            if count_active_clients() >= MAX_CLIENTS:
+                raise ClientLimitReached()
 
-        await vpn.add_client(email, password, sub_id, expires_ms)
+            email      = f"tg_{user_id}"
+            sub_id     = secrets.token_hex(8)
+            password   = secrets.token_urlsafe(24)
+            expires_at = now + extra_seconds
+            expires_ms = expires_at * 1000
 
-        try:
-            upsert_vpn_client(user_id, str(uuid.uuid4()), email, sub_id, password, 0, expires_at)
-        except Exception as db_err:
-            logger.critical(
-                "DB write failed after vpn-api.add_client — orphaned server client! "
-                "user_id=%s email=%s sub_id=%s — %s",
-                user_id, email, sub_id, db_err,
-            )
-            raise
+            await vpn.add_client(email, password, sub_id, expires_ms)
 
-        return sub_id, expires_at
+            try:
+                upsert_vpn_client(user_id, str(uuid.uuid4()), email, sub_id, password, 0, expires_at)
+            except Exception as db_err:
+                logger.critical(
+                    "DB write failed after vpn-api.add_client — orphaned server client! "
+                    "user_id=%s email=%s sub_id=%s — %s",
+                    user_id, email, sub_id, db_err,
+                )
+                raise
+
+            return sub_id, expires_at
 
 
 # ─── YooMoney payment creation ─────────────────────────────────────────────
@@ -233,6 +254,7 @@ async def cmd_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         links_text(client["sub_id"], client["expires_at"], "Активная"),
         parse_mode="HTML",
+        reply_markup=links_keyboard(client["sub_id"]),
     )
 
 
@@ -271,7 +293,7 @@ async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.edit_text(
             links_text(client["sub_id"], client["expires_at"], "Активная"),
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([
+            reply_markup=links_keyboard(client["sub_id"], [
                 [InlineKeyboardButton("💳 Продлить подписку", callback_data="buy")],
                 [InlineKeyboardButton("⬅️ Назад", callback_data="back_main")],
             ]),
@@ -292,9 +314,15 @@ async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.edit_text(
                 links_text(sub_id, exp, "Пробный период (1 день)"),
                 parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([
+                reply_markup=links_keyboard(sub_id, [
                     [InlineKeyboardButton("💳 Купить подписку", callback_data="buy")],
                 ]),
+            )
+        except ClientLimitReached:
+            await q.message.edit_text(
+                "😔 Все слоты заняты — сервис временно не принимает новых пользователей.\n"
+                "Напиши в поддержку, мы добавим тебя в список ожидания.",
+                reply_markup=back_button("support"),
             )
         except Exception as e:
             logger.error("trial error user=%s: %s", user.id, e)
@@ -320,6 +348,13 @@ async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not YOO_SHOP_ID or not YOO_SECRET:
             await q.message.edit_text(
                 "⚠️ Оплата временно недоступна. Обратитесь в поддержку.",
+                reply_markup=back_button("support"),
+            )
+            return
+        if not has_active and count_active_clients() >= MAX_CLIENTS:
+            await q.message.edit_text(
+                "😔 Все слоты заняты — сервис временно не принимает новых пользователей.\n"
+                "Напиши в поддержку, мы добавим тебя в список ожидания.",
                 reply_markup=back_button("support"),
             )
             return
@@ -396,6 +431,7 @@ async def handle_yoomoney_webhook(request: web.Request) -> web.Response:
 
     try:
         sub_id, exp = await create_or_extend_vpn_client(user_id, plan_secs)
+        mark_payment_provisioned(yoo_id)
         bot = _app_bot
         if bot:
             await bot.send_message(
@@ -405,11 +441,23 @@ async def handle_yoomoney_webhook(request: web.Request) -> web.Response:
                     + links_text(sub_id, exp, plan_name)
                 ),
                 parse_mode="HTML",
+                reply_markup=links_keyboard(sub_id),
             )
         logger.info(
             "webhook: activated plan=%s for user=%s until=%s",
             confirmed_plan, user_id, fmt_dt(exp),
         )
+    except ClientLimitReached:
+        logger.error("webhook: client limit reached, cannot provision user=%s", user_id)
+        bot = _app_bot
+        if bot:
+            await bot.send_message(
+                chat_id=user_id,
+                text=(
+                    "✅ Оплата прошла, но все слоты заняты — мы не смогли активировать подписку автоматически.\n\n"
+                    "Напиши в поддержку @champselyseee, вопрос решим вручную."
+                ),
+            )
     except Exception as e:
         logger.error("webhook processing error user=%s: %s", user_id, e)
 

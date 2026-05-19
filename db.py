@@ -17,6 +17,9 @@ def _db():
     con.execute("PRAGMA synchronous=NORMAL")
     try:
         yield con
+    except Exception:
+        con.rollback()
+        raise
     finally:
         con.close()
 
@@ -42,31 +45,36 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS payments (
-                yoo_id     TEXT PRIMARY KEY,
-                user_id    INTEGER NOT NULL,
-                plan       TEXT NOT NULL,
-                amount     REAL NOT NULL,
-                created_at INTEGER NOT NULL,
-                confirmed  INTEGER NOT NULL DEFAULT 0
+                yoo_id      TEXT PRIMARY KEY,
+                user_id     INTEGER NOT NULL,
+                plan        TEXT NOT NULL,
+                amount      REAL NOT NULL,
+                created_at  INTEGER NOT NULL,
+                confirmed   INTEGER NOT NULL DEFAULT 0,
+                provisioned INTEGER NOT NULL DEFAULT 0
             );
         """)
         con.commit()
+        try:
+            con.execute("ALTER TABLE payments ADD COLUMN provisioned INTEGER NOT NULL DEFAULT 0")
+            con.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def get_or_create_user(user_id: int, username) -> sqlite3.Row:
     with _db() as con:
+        con.execute(
+            "INSERT OR IGNORE INTO users(user_id, username, created_at) VALUES(?,?,?)",
+            (user_id, username, int(time.time()))
+        )
+        con.commit()
         row = con.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
-        if not row:
-            con.execute(
-                "INSERT INTO users(user_id, username, created_at) VALUES(?,?,?)",
-                (user_id, username, int(time.time()))
-            )
-            con.commit()
-        elif username and row["username"] != username:
+        if username and row["username"] != username:
             con.execute("UPDATE users SET username=? WHERE user_id=?", (username, user_id))
             con.commit()
-        # Always re-fetch to return consistent state
-        return con.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+            return con.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+        return row
 
 
 def mark_trial_used(user_id: int):
@@ -99,6 +107,15 @@ def upsert_vpn_client(user_id: int, client_uuid: str, email: str, sub_id: str,
         con.commit()
 
 
+def count_active_clients() -> int:
+    with _db() as con:
+        row = con.execute(
+            "SELECT COUNT(*) FROM vpn_clients WHERE expires_at > ?",
+            (int(time.time()),)
+        ).fetchone()
+        return row[0]
+
+
 def set_vpn_expiry(user_id: int, expires_at: int):
     with _db() as con:
         con.execute(
@@ -120,19 +137,25 @@ def save_payment(yoo_id: str, user_id: int, plan: str, amount: float):
 
 def confirm_payment(yoo_id: str):
     """
-    Idempotent: atomically marks the payment confirmed and returns (user_id, plan).
-    Returns None if already confirmed or not found.
-    SELECT is done before commit so the row is still visible in the same transaction.
+    Marks payment confirmed (idempotent). Returns (user_id, plan) if confirmed
+    but not yet provisioned — allows webhook retry on failed VPN provisioning.
+    Returns None if already provisioned or payment not found.
     """
     with _db() as con:
-        cur = con.execute(
+        con.execute(
             "UPDATE payments SET confirmed=1 WHERE yoo_id=? AND confirmed=0",
             (yoo_id,)
         )
-        if cur.rowcount == 0:
-            return None
         row = con.execute(
-            "SELECT user_id, plan FROM payments WHERE yoo_id=?", (yoo_id,)
+            "SELECT user_id, plan FROM payments "
+            "WHERE yoo_id=? AND confirmed=1 AND provisioned=0",
+            (yoo_id,)
         ).fetchone()
         con.commit()
         return (row["user_id"], row["plan"]) if row else None
+
+
+def mark_payment_provisioned(yoo_id: str):
+    with _db() as con:
+        con.execute("UPDATE payments SET provisioned=1 WHERE yoo_id=?", (yoo_id,))
+        con.commit()
