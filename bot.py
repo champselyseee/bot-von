@@ -44,10 +44,28 @@ logger = logging.getLogger(__name__)
 # ─── Config ────────────────────────────────────────────────────────────────
 
 BOT_TOKEN    = os.environ["BOT_TOKEN"]
-VPN_API_URL  = os.environ["VPN_API_URL"]   # http://78.40.117.96:8765
+# ── Multi-server scaffold ──────────────────────────────────────────────────
+# Each server needs its own VPN_API_URL_N, VPN_API_KEY_N env vars.
+# Server 1 keeps the original names for backwards compatibility.
+# To add server 2: set VPN_API_URL_2 and VPN_API_KEY_2 in Railway Variables.
+# The subscription endpoint on each server handles its own /sub/{sub_id} output;
+# the bot calls add_client / update_client on every server in VPN_SERVERS.
+VPN_API_URL  = os.environ["VPN_API_URL"]
 VPN_API_KEY  = os.environ["VPN_API_KEY"]
 VPN_DOMAIN   = os.environ.get("VPN_DOMAIN", "camavali.duckdns.org")
 VPN_SUB_PORT = os.environ.get("VPN_SUB_PORT", "2097")
+
+def _load_servers() -> list:
+    """Return list of (label, VPNApiClient) for every configured server."""
+    servers = [("server_1", VPNApiClient(VPN_API_URL, VPN_API_KEY))]
+    for n in range(2, 10):
+        url = os.environ.get(f"VPN_API_URL_{n}")
+        key = os.environ.get(f"VPN_API_KEY_{n}")
+        if url and key:
+            servers.append((f"server_{n}", VPNApiClient(url, key)))
+    return servers
+
+VPN_SERVERS: list = _load_servers()  # [(label, VPNApiClient), ...]
 YOO_SHOP_ID  = os.environ.get("YOOMONEY_SHOP_ID", "")
 YOO_SECRET   = os.environ.get("YOOMONEY_SECRET_KEY", "")
 PORT         = int(os.environ.get("PORT", "8080"))
@@ -67,7 +85,7 @@ PLAN_MAP = {
 
 MSK = timezone(timedelta(hours=3))
 
-vpn = VPNApiClient(VPN_API_URL, VPN_API_KEY)
+vpn = VPN_SERVERS[0][1]  # primary server — used directly by existing code
 
 _client_create_lock = asyncio.Lock()
 
@@ -157,9 +175,13 @@ async def create_or_extend_vpn_client(user_id: int, extra_seconds: int) -> tuple
             base = max(existing["expires_at"], now)
         else:
             base = now
-        new_exp     = base + extra_seconds
-        expires_ms  = new_exp * 1000
-        await vpn.update_client(existing["email"], expires_ms)
+        new_exp    = base + extra_seconds
+        expires_ms = new_exp * 1000
+        for _label, srv in VPN_SERVERS:
+            try:
+                await srv.update_client(existing["email"], expires_ms)
+            except Exception as e:
+                logger.error("update_client failed on %s for user=%s: %s", _label, user_id, e)
         set_vpn_expiry(user_id, new_exp)
         return existing["sub_id"], new_exp
     else:
@@ -173,7 +195,11 @@ async def create_or_extend_vpn_client(user_id: int, extra_seconds: int) -> tuple
             expires_at = now + extra_seconds
             expires_ms = expires_at * 1000
 
-            await vpn.add_client(email, password, sub_id, expires_ms)
+            for _label, srv in VPN_SERVERS:
+                try:
+                    await srv.add_client(email, password, sub_id, expires_ms)
+                except Exception as e:
+                    logger.error("add_client failed on %s for user=%s: %s", _label, user_id, e)
 
             try:
                 upsert_vpn_client(user_id, str(uuid.uuid4()), email, sub_id, password, 0, expires_at)
@@ -308,7 +334,7 @@ async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if cdata == "trial":
-        if udata["trial_used"]:
+        if udata["trial_used"] or get_vpn_client(user.id):
             await q.message.edit_text(
                 "⚠️ Пробный период уже использован. Выбери тариф:",
                 reply_markup=buy_keyboard(),
@@ -467,6 +493,15 @@ async def handle_yoomoney_webhook(request: web.Request) -> web.Response:
             )
     except Exception as e:
         logger.error("webhook processing error user=%s: %s", user_id, e)
+        bot = _app_bot
+        if bot:
+            await bot.send_message(
+                chat_id=user_id,
+                text=(
+                    "✅ Оплата прошла, но при активации возникла ошибка.\n\n"
+                    "Напиши в поддержку @champselyseee — разберёмся вручную."
+                ),
+            )
 
     return web.Response(status=200)
 
