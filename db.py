@@ -159,3 +159,12 @@ def mark_payment_provisioned(yoo_id: str):
     with _db() as con:
         con.execute("UPDATE payments SET provisioned=1 WHERE yoo_id=?", (yoo_id,))
         con.commit()
+
+
+def has_provisioned_payment(user_id: int) -> bool:
+    with _db() as con:
+        row = con.execute(
+            "SELECT 1 FROM payments WHERE user_id=? AND provisioned=1 LIMIT 1",
+            (user_id,)
+        ).fetchone()
+        return row is not None

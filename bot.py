@@ -23,6 +23,7 @@ from db import (
     count_active_clients,
     get_or_create_user,
     get_vpn_client,
+    has_provisioned_payment,
     init_db,
     mark_payment_provisioned,
     mark_trial_used,
@@ -149,7 +150,14 @@ async def create_or_extend_vpn_client(user_id: int, extra_seconds: int) -> tuple
     now = int(time.time())
 
     if existing:
-        new_exp     = max(existing["expires_at"], now) + extra_seconds
+        # Stack on top of existing expiry only when renewing an already-paid plan.
+        # For the first paid purchase (after trial), start from now to avoid
+        # trial time bleeding into the paid subscription period.
+        if has_provisioned_payment(user_id):
+            base = max(existing["expires_at"], now)
+        else:
+            base = now
+        new_exp     = base + extra_seconds
         expires_ms  = new_exp * 1000
         await vpn.update_client(existing["email"], expires_ms)
         set_vpn_expiry(user_id, new_exp)
