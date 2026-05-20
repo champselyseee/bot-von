@@ -106,9 +106,11 @@ async def cb_plan(callback: CallbackQuery, config, payments, **_):
 
 @router.callback_query(F.data == "cancel_payment")
 async def cb_cancel(callback: CallbackQuery, config, **_):
-    user_id_row = await db.get_user_by_tg(config.db_path, callback.from_user.id)
-    if user_id_row:
-        await db.set_payment_status(config.db_path, "", "cancelled")  # soft cancel via UI
+    user = await db.get_user_by_tg(config.db_path, callback.from_user.id)
+    if user:
+        pending = await db.get_pending_payment(config.db_path, user["id"])
+        if pending:
+            await db.set_payment_status(config.db_path, pending["yookassa_id"], "cancelled")
     await callback.message.edit_text(
         "❌ Платёж отменён.",
         reply_markup=back_to_menu(),
@@ -140,7 +142,10 @@ async def cmd_give(message: Message, config, vpn, **_):
         await message.answer("Пользователь не найден")
         return
 
-    await _provision(config, vpn, user["id"], target_tg, plan, bot=message.bot, notify_bot=False)
+    await provision_after_payment(
+        config, vpn, message.bot, target_tg, user["id"], plan,
+        f"manual_{target_tg}_{int(time.time())}",
+    )
     await message.answer(f"✅ Подписка выдана пользователю {target_tg}")
 
 

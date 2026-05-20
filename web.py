@@ -1,27 +1,44 @@
 """aiohttp web server: YooKassa webhook + connect.html page."""
 from __future__ import annotations
-import json
 import logging
-import os
 from pathlib import Path
 from urllib.parse import quote
 
-from aiohttp import web
+from aiohttp import web, ClientSession, ClientTimeout
 
 log = logging.getLogger(__name__)
 
 _TEMPLATE = (Path(__file__).parent / "connect.html").read_text(encoding="utf-8")
 
+# Cache: sub_url → happ:// link (lives for process lifetime, good enough)
+_CRYPT_CACHE: dict[str, str] = {}
 
-def _build_connect_page(config, sub_id: str) -> str:
-    sub_url = f"{config.sub_base_url}/sub/{sub_id}"
-    crypt_link = f"happ://import/sub?url={quote(sub_url, safe='')}"
-    return (
-        _TEMPLATE
-        .replace("CRYPT_LINK_HERE", crypt_link)
-        .replace("SUB_URL_HERE", sub_url)
-        .replace("ROUTE_B64_HERE", config.ROUTE_B64)
-    )
+
+async def _get_crypt_link(sub_url: str) -> str:
+    """Get happ:// import link via crypto.happ.su; fall back to raw import URL."""
+    if sub_url in _CRYPT_CACHE:
+        return _CRYPT_CACHE[sub_url]
+    try:
+        timeout = ClientTimeout(total=8)
+        async with ClientSession(timeout=timeout) as s:
+            async with s.post(
+                "https://crypto.happ.su/api-v2.php",
+                json={"url": sub_url},
+                headers={"User-Agent": "Mozilla/5.0"},
+            ) as r:
+                data = await r.json(content_type=None)
+                link: str | None = None
+                if isinstance(data, dict):
+                    link = data.get("encrypted_link") or data.get("link") or data.get("url")
+                elif isinstance(data, str) and data.startswith("happ://"):
+                    link = data
+                if link:
+                    _CRYPT_CACHE[sub_url] = link
+                    return link
+    except Exception as e:
+        log.warning("crypto.happ.su failed (%s), using fallback", e)
+    fallback = f"happ://import/sub?url={quote(sub_url, safe='')}"
+    return fallback
 
 
 def create_app(bot, config, vpn) -> web.Application:
@@ -31,7 +48,14 @@ def create_app(bot, config, vpn) -> web.Application:
 
     async def connect_page(request: web.Request) -> web.Response:
         sub_id = request.match_info["sub_id"]
-        html = _build_connect_page(config, sub_id)
+        sub_url = f"{config.sub_base_url}/sub/{sub_id}"
+        crypt_link = await _get_crypt_link(sub_url)
+        html = (
+            _TEMPLATE
+            .replace("CRYPT_LINK_HERE", crypt_link)
+            .replace("SUB_URL_HERE", sub_url)
+            .replace("ROUTE_B64_HERE", config.ROUTE_B64)
+        )
         return web.Response(text=html, content_type="text/html")
 
     # ── /payment/webhook ─────────────────────────────────────────────────────
