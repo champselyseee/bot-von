@@ -21,6 +21,7 @@ from telegram.ext import (
 from db import (
     confirm_payment,
     count_active_clients,
+    get_all_vpn_clients,
     get_or_create_user,
     get_vpn_client,
     has_provisioned_payment,
@@ -31,7 +32,7 @@ from db import (
     set_vpn_expiry,
     upsert_vpn_client,
 )
-from vpn_api import VPNApiClient
+from vpn_api import SubApiClient, VPNApiClient
 
 load_dotenv()
 
@@ -66,6 +67,19 @@ def _load_servers() -> list:
     return servers
 
 VPN_SERVERS: list = _load_servers()  # [(label, VPNApiClient), ...]
+
+def _load_sub_servers() -> list:
+    """Return list of SubApiClient for every configured sub server."""
+    default_url = os.environ.get("VPN_SUB_URL", f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}")
+    servers = [SubApiClient(default_url, VPN_API_KEY)]
+    for n in range(2, 10):
+        url = os.environ.get(f"VPN_SUB_URL_{n}")
+        key = os.environ.get(f"VPN_API_KEY_{n}", VPN_API_KEY)
+        if url:
+            servers.append(SubApiClient(url, key))
+    return servers
+
+SUB_SERVERS: list = _load_sub_servers()  # [SubApiClient, ...]
 YOO_SHOP_ID  = os.environ.get("YOOMONEY_SHOP_ID", "")
 YOO_SECRET   = os.environ.get("YOOMONEY_SECRET_KEY", "")
 PORT         = int(os.environ.get("PORT", "8080"))
@@ -210,6 +224,12 @@ async def create_or_extend_vpn_client(user_id: int, extra_seconds: int) -> tuple
                     user_id, email, sub_id, db_err,
                 )
                 raise
+
+            for sub_srv in SUB_SERVERS:
+                try:
+                    await sub_srv.register_client(sub_id, email, password)
+                except Exception as e:
+                    logger.warning("sub register failed for user=%s: %s", user_id, e)
 
             return sub_id, expires_at
 
@@ -548,6 +568,22 @@ async def run_web():
     logger.info("Web server started on :%s", PORT)
 
 
+async def _sync_clients_to_sub():
+    """Re-register all clients from DB with sub servers. Runs once at startup."""
+    clients = get_all_vpn_clients()
+    if not clients:
+        return
+    for client in clients:
+        for sub_srv in SUB_SERVERS:
+            try:
+                await sub_srv.register_client(
+                    client["sub_id"], client["email"], client["password"]
+                )
+            except Exception as e:
+                logger.warning("startup sync: sub register failed for %s: %s", client["email"], e)
+    logger.info("startup sync: registered %d clients with sub servers", len(clients))
+
+
 # ─── Entry point ────────────────────────────────────────────────────────────
 
 async def main():
@@ -555,6 +591,7 @@ async def main():
 
     init_db()
     await run_web()
+    await _sync_clients_to_sub()
 
     tg = ApplicationBuilder().token(BOT_TOKEN).build()
     _app_bot = tg.bot
