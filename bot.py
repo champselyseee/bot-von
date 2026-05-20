@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import secrets
+import ssl
 import time
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 # ─── Config ────────────────────────────────────────────────────────────────
 
 BOT_TOKEN    = os.environ["BOT_TOKEN"]
+PUBLIC_URL   = os.environ.get("PUBLIC_URL", "").rstrip("/")  # e.g. https://xxx.railway.app
 # ── Multi-server scaffold ──────────────────────────────────────────────────
 # Each server needs its own VPN_API_URL_N, VPN_API_KEY_N env vars.
 # Server 1 keeps the original names for backwards compatibility.
@@ -117,8 +119,14 @@ def fmt_dt(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=MSK).strftime("%d.%m.%Y %H:%M МСК")
 
 
+def _connect_url(sub_id: str) -> str:
+    if PUBLIC_URL:
+        return f"{PUBLIC_URL}/connect/{sub_id}"
+    return f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/connect/{sub_id}"
+
+
 def links_text(sub_id: str, expires_at: int, plan_name: str) -> str:
-    connect_url = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/connect/{sub_id}"
+    connect_url = _connect_url(sub_id)
     return (
         f"✅ <b>VPN подключение активно</b>\n"
         f"📋 Тариф: <b>{plan_name}</b>\n"
@@ -130,13 +138,13 @@ def links_text(sub_id: str, expires_at: int, plan_name: str) -> str:
         f"Переключать вручную ничего не нужно. Всё происходит само.\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<b>📲 Как подключиться:</b>\n\n"
-        f"Нажми кнопку ниже или открой ссылку — автоматически откроется hApp и добавит подписку:\n"
+        f"Нажми кнопку ниже — откроется страница настройки VPN:\n"
         f"<code>{connect_url}</code>"
     )
 
 
 def links_keyboard(sub_id: str, extra_rows: list | None = None) -> InlineKeyboardMarkup:
-    connect_url = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/connect/{sub_id}"
+    connect_url = _connect_url(sub_id)
     rows = [[InlineKeyboardButton("📲 Добавить в hApp", url=connect_url)]]
     if extra_rows:
         rows.extend(extra_rows)
@@ -557,10 +565,48 @@ async def handle_health(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+_sub_ssl = ssl.create_default_context()
+_sub_ssl.check_hostname = False
+_sub_ssl.verify_mode = ssl.CERT_NONE
+
+
+async def handle_connect(request: web.Request) -> web.Response:
+    """Proxy /connect/{sub_id} to hy2-sub.py so the link works via standard HTTPS port."""
+    sub_id = request.match_info.get("sub_id", "")
+    if not sub_id:
+        return web.Response(status=404)
+
+    target = f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/connect/{sub_id}"
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                target,
+                ssl=_sub_ssl,
+                timeout=aiohttp.ClientTimeout(total=15),
+                allow_redirects=True,
+            ) as resp:
+                body = await resp.read()
+                return web.Response(
+                    body=body,
+                    content_type="text/html",
+                    charset="utf-8",
+                    status=resp.status,
+                )
+    except Exception as e:
+        logger.error("connect proxy error sub_id=%s: %s", sub_id, e)
+        return web.Response(
+            text="<h2>Сервис временно недоступен. Попробуй позже.</h2>",
+            content_type="text/html",
+            charset="utf-8",
+            status=502,
+        )
+
+
 async def run_web():
     app = web.Application()
     app.router.add_post("/yoomoney/webhook", handle_yoomoney_webhook)
     app.router.add_post("/yukassa/webhook", handle_yoomoney_webhook)
+    app.router.add_get("/connect/{sub_id}", handle_connect)
     app.router.add_get("/health", handle_health)
     runner = web.AppRunner(app)
     await runner.setup()
