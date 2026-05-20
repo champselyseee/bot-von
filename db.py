@@ -171,3 +171,8 @@ def has_provisioned_payment(user_id: int) -> bool:
             (user_id,)
         ).fetchone()
         return row is not None
+
+
+def get_all_vpn_clients() -> list:
+    with _db() as con:
+        return con.execute("SELECT * FROM vpn_clients").fetchall()
