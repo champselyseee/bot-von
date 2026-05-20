@@ -122,7 +122,8 @@ def fmt_dt(ts: int) -> str:
 def _connect_url(sub_id: str) -> str:
     if PUBLIC_URL:
         return f"{PUBLIC_URL}/connect/{sub_id}"
-    return f"https://{VPN_DOMAIN}:{VPN_SUB_PORT}/connect/{sub_id}"
+    # Fallback: port-80 setup-server (works on all Russian ISPs, no DPI blocking)
+    return f"http://{VPN_DOMAIN}/setup/{sub_id}"
 
 
 def links_text(sub_id: str, expires_at: int, plan_name: str) -> str:
