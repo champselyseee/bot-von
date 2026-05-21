@@ -206,12 +206,15 @@ async def provision_after_payment(config, vpn, bot, tg_id: int, user_id: int, pl
                 pass
             return
 
-        await db.create_sub(config.db_path, user_id, sub_id, email, plan, expires_at, password)
+        inserted = await db.create_sub(config.db_path, user_id, sub_id, email, plan, expires_at, password)
+        if not inserted:
+            # Email already in DB (expired/cancelled trial) — reactivate that row with new sub_id
+            log.info("Reactivating old sub for email=%s tg_id=%s", email, tg_id)
+            await db.reactivate_sub(config.db_path, email, sub_id, plan, expires_at, password)
         await db.set_payment_status(config.db_path, yookassa_id, "succeeded", sub_id)
 
         from datetime import datetime
         exp_str = datetime.fromtimestamp(expires_at).strftime("%d.%m.%Y")
-        sub_url = _sub_url(config, sub_id)
         connect_url = _connect_url(config, sub_id)
 
         try:

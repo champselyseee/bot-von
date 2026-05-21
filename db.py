@@ -117,6 +117,25 @@ async def create_sub(
             return False
 
 
+async def reactivate_sub(
+    path: str,
+    email: str,
+    sub_id: str,
+    plan: str,
+    expires_at: int,
+    vpn_password: str | None = None,
+) -> None:
+    """Reactivate a previous expired/cancelled subscription (same email, new sub_id).
+    Called when user buys a new plan after their trial/old sub was already expired+cleaned up."""
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            "UPDATE subscriptions SET sub_id=?, plan=?, expires_at=?, status='active', vpn_password=? "
+            "WHERE email=?",
+            (sub_id, plan, expires_at, vpn_password, email),
+        )
+        await db.commit()
+
+
 async def extend_sub(path: str, sub_id: str, new_expires_at: int, plan: str) -> None:
     async with aiosqlite.connect(path) as db:
         await db.execute(

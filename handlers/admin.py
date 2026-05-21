@@ -65,6 +65,56 @@ async def cmd_stats(message: Message, config, **_):
     )
 
 
+@router.callback_query(F.data == "admin:find")
+async def cb_admin_find(callback: CallbackQuery, config, **_):
+    if not _is_admin(callback.from_user.id, config):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.answer(
+        "Отправь команду: /find <tg_id>\nПример: /find 123456789",
+        show_alert=True,
+    )
+
+
+@router.message(Command("find"))
+async def cmd_find(message: Message, config, **_):
+    if not _is_admin(message.from_user.id, config):
+        return
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.answer("Usage: /find <tg_id>")
+        return
+    try:
+        target_tg = int(parts[1])
+    except ValueError:
+        await message.answer("tg_id должен быть числом")
+        return
+
+    user = await db.get_user_by_tg(config.db_path, target_tg)
+    if not user:
+        await message.answer("Пользователь не найден")
+        return
+
+    sub = await db.get_active_sub(config.db_path, user["id"])
+    name = (user["username"] and f"@{user['username']}") or user["full_name"] or str(target_tg)
+
+    if sub:
+        exp = datetime.fromtimestamp(sub["expires_at"]).strftime("%d.%m.%Y %H:%M")
+        text = (
+            f"👤 <b>{name}</b> (tg_id: <code>{target_tg}</code>)\n\n"
+            f"✅ Подписка: {sub['plan']}\n"
+            f"До: <b>{exp}</b>\n"
+            f"sub_id: <code>{sub['sub_id']}</code>\n"
+            f"email: <code>{sub['email']}</code>"
+        )
+    else:
+        text = (
+            f"👤 <b>{name}</b> (tg_id: <code>{target_tg}</code>)\n\n"
+            "○ Нет активной подписки"
+        )
+    await message.answer(text, parse_mode="HTML")
+
+
 @router.message(Command("revoke"))
 async def cmd_revoke(message: Message, config, vpn, **_):
     """Usage: /revoke <tg_id>  — remove user's VPN access immediately."""
