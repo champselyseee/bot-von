@@ -34,7 +34,6 @@ async def cb_profile(callback: CallbackQuery, config, **_):
         )
     else:
         exp = datetime.fromtimestamp(sub["expires_at"]).strftime("%d.%m.%Y")
-        sub_url = f"{config.sub_base_url}/sub/{sub['sub_id']}"
         connect_url = f"{config.base_url}/connect/{sub['sub_id']}"
         plan_label = config.plan_label(sub["plan"])
 
@@ -43,39 +42,14 @@ async def cb_profile(callback: CallbackQuery, config, **_):
             f"Статус: ✅ Активна\n"
             f"Тариф: {plan_label}\n"
             f"До: <b>{exp}</b>\n\n"
-            f"🔗 Ссылка подписки:\n<code>{sub_url}</code>"
+            f"📲 <b>Страница подключения</b> (открой в Safari):\n"
+            f"<a href='{connect_url}'>{connect_url}</a>"
         )
         await callback.message.edit_text(
-            text, reply_markup=profile_keyboard(True), parse_mode="HTML"
+            text,
+            reply_markup=profile_keyboard(True),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
         )
 
-    await callback.answer()
-
-
-@router.callback_query(F.data == "connect_info")
-async def cb_connect_info(callback: CallbackQuery, config, **_):
-    user = await db.get_user_by_tg(config.db_path, callback.from_user.id)
-    if not user:
-        await callback.answer("Нет активной подписки", show_alert=True)
-        return
-
-    sub = await db.get_active_sub(config.db_path, user["id"])
-    if not sub:
-        await callback.answer("Нет активной подписки", show_alert=True)
-        return
-
-    connect_url = f"{config.base_url}/connect/{sub['sub_id']}"
-    sub_url = f"{config.sub_base_url}/sub/{sub['sub_id']}"
-
-    text = (
-        "📲 <b>Как подключиться</b>\n\n"
-        f"Открой ссылку в <b>Safari</b> (не в браузере Telegram):\n"
-        f"<a href='{connect_url}'>{connect_url}</a>\n\n"
-        f"Или добавь подписку вручную:\n<code>{sub_url}</code>\n\n"
-        "<i>Страница содержит кнопку «Добавить в Happ» и пошаговую инструкцию.</i>"
-    )
-    await callback.message.edit_text(
-        text, reply_markup=back_to_menu(), parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
     await callback.answer()

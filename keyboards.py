@@ -29,8 +29,7 @@ def payment_keyboard(url: str) -> InlineKeyboardMarkup:
 def profile_keyboard(has_sub: bool) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if has_sub:
-        kb.row(InlineKeyboardButton(text="🔄 Продлить", callback_data="buy"))
-        kb.row(InlineKeyboardButton(text="📲 Как подключиться", callback_data="connect_info"))
+        kb.row(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="buy"))
     else:
         kb.row(InlineKeyboardButton(text="💳 Купить VPN", callback_data="buy"))
     kb.row(InlineKeyboardButton(text="◀️ Назад", callback_data="menu"))
