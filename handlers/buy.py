@@ -14,6 +14,16 @@ from keyboards import plan_keyboard, payment_keyboard, back_to_menu
 router = Router()
 log = logging.getLogger(__name__)
 
+_BOT_USERNAME: str | None = None  # cached after first call
+
+
+async def _bot_username(bot) -> str:
+    global _BOT_USERNAME
+    if not _BOT_USERNAME:
+        me = await bot.get_me()
+        _BOT_USERNAME = me.username
+    return _BOT_USERNAME
+
 
 def _sub_url(config, sub_id: str) -> str:
     return f"{config.sub_base_url}/sub/{sub_id}"
@@ -45,7 +55,10 @@ async def cb_buy(callback: CallbackQuery, config, **_):
 
 @router.callback_query(F.data.startswith("plan:"))
 async def cb_plan(callback: CallbackQuery, config, payments, **_):
-    plan = callback.data.split(":", 1)[1]  # "2w" or "1m"
+    plan = callback.data.split(":", 1)[1]
+    if plan not in ("2w", "1m"):  # guard against unexpected callback data
+        await callback.answer()
+        return
     tg_id = callback.from_user.id
     amount = config.plan_price(plan)
     label = config.plan_label(plan)
@@ -75,7 +88,7 @@ async def cb_plan(callback: CallbackQuery, config, payments, **_):
         payment_id, pay_url = await payments.create_payment(
             amount=amount,
             description=f"Camille VPN — {label}",
-            return_url=f"https://t.me/{(await callback.bot.get_me()).username}",
+            return_url=f"https://t.me/{await _bot_username(callback.bot)}",
             metadata={"tg_id": tg_id, "plan": plan, "user_id": user_id},
         )
     except Exception as e:

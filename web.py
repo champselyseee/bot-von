@@ -110,7 +110,13 @@ def create_app(bot, config, vpn) -> web.Application:
         log.info("Webhook: payment %s claimed, provisioning tg_id=%s plan=%s", yookassa_id, tg_id, plan)
 
         from handlers.buy import provision_after_payment
-        await provision_after_payment(config, vpn, bot, tg_id, user_id, plan, yookassa_id)
+        try:
+            await provision_after_payment(config, vpn, bot, tg_id, user_id, plan, yookassa_id)
+        except Exception as e:
+            log.exception("provision_after_payment failed for %s: %s", yookassa_id, e)
+            # Roll back to pending so YooKassa will retry and we try again
+            await database.set_payment_status(config.db_path, yookassa_id, "pending")
+            return web.Response(status=500)
 
         return web.Response(status=200)
 
