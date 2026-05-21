@@ -114,6 +114,15 @@ async def set_sub_status(path: str, sub_id: str, status: str) -> None:
         await db.commit()
 
 
+async def has_any_sub(path: str, user_id: int) -> bool:
+    """True if user has EVER had a subscription (active, expired, cancelled)."""
+    async with aiosqlite.connect(path) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM subscriptions WHERE user_id=?", (user_id,)
+        ) as cur:
+            return (await cur.fetchone())[0] > 0
+
+
 async def get_expired_subs(path: str) -> list:
     """Active subscriptions past their expiry date."""
     async with aiosqlite.connect(path) as db:

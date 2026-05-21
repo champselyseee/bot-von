@@ -43,10 +43,14 @@ class Config:
         return self.price_2w if plan == "2w" else self.price_1m
 
     def plan_label(self, plan: str) -> str:
-        return "2 недели" if plan == "2w" else "1 месяц"
+        if plan == "2w": return "2 недели"
+        if plan == "1d": return "1 день (пробный)"
+        return "1 месяц"
 
     def plan_days(self, plan: str) -> int:
-        return 14 if plan == "2w" else 30
+        if plan == "2w": return 14
+        if plan == "1d": return 1
+        return 30
 
 
 def load_config() -> Config:
