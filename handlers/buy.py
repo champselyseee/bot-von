@@ -206,7 +206,7 @@ async def provision_after_payment(config, vpn, bot, tg_id: int, user_id: int, pl
                 pass
             return
 
-        await db.create_sub(config.db_path, user_id, sub_id, email, plan, expires_at)
+        await db.create_sub(config.db_path, user_id, sub_id, email, plan, expires_at, password)
         await db.set_payment_status(config.db_path, yookassa_id, "succeeded", sub_id)
 
         from datetime import datetime

@@ -15,14 +15,15 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS subscriptions (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL REFERENCES users(id),
-    sub_id      TEXT UNIQUE NOT NULL,
-    email       TEXT UNIQUE NOT NULL,
-    plan        TEXT NOT NULL,
-    expires_at  INTEGER NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'active',
-    created_at  INTEGER NOT NULL DEFAULT (unixepoch())
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id),
+    sub_id       TEXT UNIQUE NOT NULL,
+    email        TEXT UNIQUE NOT NULL,
+    plan         TEXT NOT NULL,
+    expires_at   INTEGER NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'active',
+    vpn_password TEXT,
+    created_at   INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
 CREATE TABLE IF NOT EXISTS payments (
@@ -41,7 +42,13 @@ CREATE TABLE IF NOT EXISTS payments (
 async def init_db(path: str) -> None:
     async with aiosqlite.connect(path) as db:
         await db.executescript(DDL)
-        await db.commit()
+        # Migrations for existing databases
+        try:
+            await db.execute("ALTER TABLE subscriptions ADD COLUMN vpn_password TEXT")
+            await db.commit()
+        except Exception:
+            pass  # Column already exists
+
 
 
 # ─── Users ────────────────────────────────────────────────────────────────────
@@ -87,14 +94,27 @@ async def get_active_sub(path: str, user_id: int) -> Optional[aiosqlite.Row]:
 
 
 async def create_sub(
-    path: str, user_id: int, sub_id: str, email: str, plan: str, expires_at: int
-) -> None:
+    path: str,
+    user_id: int,
+    sub_id: str,
+    email: str,
+    plan: str,
+    expires_at: int,
+    vpn_password: str | None = None,
+) -> bool:
+    """Insert subscription. Returns False if email already exists (duplicate trial guard)."""
+    import aiosqlite as _aiosqlite
     async with aiosqlite.connect(path) as db:
-        await db.execute(
-            "INSERT INTO subscriptions (user_id, sub_id, email, plan, expires_at) VALUES (?,?,?,?,?)",
-            (user_id, sub_id, email, plan, expires_at),
-        )
-        await db.commit()
+        try:
+            await db.execute(
+                "INSERT INTO subscriptions (user_id, sub_id, email, plan, expires_at, vpn_password) "
+                "VALUES (?,?,?,?,?,?)",
+                (user_id, sub_id, email, plan, expires_at, vpn_password),
+            )
+            await db.commit()
+            return True
+        except _aiosqlite.IntegrityError:
+            return False
 
 
 async def extend_sub(path: str, sub_id: str, new_expires_at: int, plan: str) -> None:
@@ -176,6 +196,20 @@ async def set_payment_status(
                 (status, yookassa_id),
             )
         await db.commit()
+
+
+async def claim_payment(path: str, yookassa_id: str) -> bool:
+    """Atomically flip payment status pending→processing.
+    Returns True only for the first caller; subsequent calls return False.
+    Prevents double-provisioning on YooKassa webhook re-delivery."""
+    async with aiosqlite.connect(path) as db:
+        async with db.execute(
+            "UPDATE payments SET status='processing' WHERE yookassa_id=? AND status='pending'",
+            (yookassa_id,),
+        ) as cur:
+            changed = cur.rowcount
+        await db.commit()
+        return changed > 0
 
 
 async def get_pending_payment(path: str, user_id: int) -> Optional[aiosqlite.Row]:

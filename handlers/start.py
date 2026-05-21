@@ -12,6 +12,10 @@ import db
 router = Router()
 log = logging.getLogger(__name__)
 
+# In-memory guard: tg_ids currently being provisioned a trial
+# Prevents race condition if user hammers /start while async call is in flight
+_TRIAL_IN_PROGRESS: set[int] = set()
+
 _WELCOME = (
     "🔐 <b>Camille VPN</b>\n\n"
     "Сервер в Швеции 🇸🇪 · VLESS+Reality и Hysteria 2\n"
@@ -44,7 +48,14 @@ async def cmd_start(message: Message, config, vpn, **_):
 
     # Новый пользователь — даём 1 день бесплатно
     if not await db.has_any_sub(config.db_path, user_id):
-        await _give_trial(message, config, vpn, user_id)
+        tg_id = message.from_user.id
+        if tg_id in _TRIAL_IN_PROGRESS:
+            return  # Concurrent /start — ignore the duplicate
+        _TRIAL_IN_PROGRESS.add(tg_id)
+        try:
+            await _give_trial(message, config, vpn, user_id)
+        finally:
+            _TRIAL_IN_PROGRESS.discard(tg_id)
         return
 
     await message.answer(_WELCOME, reply_markup=main_menu(), parse_mode="HTML")
@@ -75,7 +86,13 @@ async def _give_trial(message: Message, config, vpn, user_id: int):
         )
         return
 
-    await db.create_sub(config.db_path, user_id, sub_id, email, "1d", expires_at)
+    inserted = await db.create_sub(config.db_path, user_id, sub_id, email, "1d", expires_at, password)
+    if not inserted:
+        # Race: another concurrent /start already inserted — just show welcome
+        log.warning("Trial create_sub collision for tg_id=%s (already exists)", tg_id)
+        await vpn.remove_client(email, sub_id)  # clean up duplicate VPN entry
+        await message.answer(_WELCOME, reply_markup=main_menu(), parse_mode="HTML")
+        return
 
     connect_url = f"{config.base_url}/connect/{sub_id}"
 

@@ -1,0 +1,15 @@
+.env
+*.db
+data/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.rtf
+.claude/
+PROJECT_NOTES.txt
+SKILL.md
+*.PNG
+*.png
+*.jpg
+happ_split_tunneling.txt

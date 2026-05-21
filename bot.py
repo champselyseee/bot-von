@@ -30,7 +30,13 @@ async def expiry_checker(bot: Bot, config, vpn: VPNClient):
             expired = await get_expired_subs(config.db_path)
             for sub in expired:
                 log.info("Expiring sub %s (tg=%s)", sub["sub_id"], sub["tg_id"])
-                await vpn.remove_client(sub["email"], sub["sub_id"])
+                ok = await vpn.remove_client(sub["email"], sub["sub_id"])
+                if not ok:
+                    log.error(
+                        "Failed to remove VPN client %s — will retry next cycle",
+                        sub["email"],
+                    )
+                    continue  # Don't mark expired; retry on next tick
                 await set_sub_status(config.db_path, sub["sub_id"], "expired")
                 try:
                     await bot.send_message(

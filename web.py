@@ -87,21 +87,27 @@ def create_app(bot, config, vpn) -> web.Application:
             log.exception("Cannot verify payment %s: %s", yookassa_id, e)
             return web.Response(status=500)
 
-        # Load pending payment from DB
+        # Atomically claim the payment — prevents double-provisioning on webhook retry
         import db as database
-        payment = await database.get_payment(config.db_path, yookassa_id)
-        if not payment:
-            log.warning("Webhook: unknown payment %s", yookassa_id)
+        claimed = await database.claim_payment(config.db_path, yookassa_id)
+        if not claimed:
+            # Either unknown payment or already processed/claimed by a concurrent request
+            payment = await database.get_payment(config.db_path, yookassa_id)
+            if not payment:
+                log.warning("Webhook: unknown payment %s", yookassa_id)
+            else:
+                log.info("Webhook: payment %s already processed (status=%s), skipping", yookassa_id, payment["status"])
             return web.Response(status=200)
 
-        if payment["status"] != "pending":
-            return web.Response(status=200)  # Already processed
+        payment = await database.get_payment(config.db_path, yookassa_id)
+        if not payment:
+            return web.Response(status=200)
 
         tg_id = payment["tg_id"]
         user_id = payment["user_id"]
         plan = payment["plan"]
 
-        log.info("Webhook: payment %s succeeded for tg_id=%s plan=%s", yookassa_id, tg_id, plan)
+        log.info("Webhook: payment %s claimed, provisioning tg_id=%s plan=%s", yookassa_id, tg_id, plan)
 
         from handlers.buy import provision_after_payment
         await provision_after_payment(config, vpn, bot, tg_id, user_id, plan, yookassa_id)
