@@ -29,7 +29,7 @@ _HELP = (
     "• 2 недели — 149 ₽\n"
     "• 1 месяц — 249 ₽\n\n"
     "<b>Приложение:</b> Happ (App Store / Google Play)\n\n"
-    "По вопросам: @camille_vpn_support"
+    "По вопросам: @champselyseee"
 )
 
 
