@@ -7,3 +7,5 @@ __pycache__/
 .DS_Store
 *.rtf
 .claude/
+PROJECT_NOTES.txt
+SKILL.md
