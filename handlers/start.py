@@ -63,6 +63,16 @@ async def cmd_start(message: Message, config, vpn, **_):
 
 async def _give_trial(message: Message, config, vpn, user_id: int):
     tg_id = message.from_user.id
+
+    if await db.count_active_subs(config.db_path) >= config.max_active_subs:
+        await message.answer(
+            "😔 Сейчас все места заняты — сервер работает на полную.\n"
+            "Напиши в поддержку, мы добавим тебя в очередь: @champselyseee",
+            reply_markup=back_to_menu(),
+            parse_mode="HTML",
+        )
+        return
+
     waiting = await message.answer("⏳ Активирую пробный доступ...")
 
     sub_id   = secrets.token_hex(8)

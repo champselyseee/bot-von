@@ -14,6 +14,7 @@ class Config:
     yookassa_secret_key: str
     price_2w: int
     price_1m: int
+    max_active_subs: int
     db_path: str
     port: int
     base_url: str       # https://xxx.up.railway.app
@@ -82,6 +83,7 @@ def load_config() -> Config:
         yookassa_secret_key=os.environ.get("YOOMONEY_SECRET_KEY", ""),
         price_2w=int(os.environ.get("PRICE_2W", 149)),
         price_1m=int(os.environ.get("PRICE_1M", 249)),
+        max_active_subs=int(os.environ.get("MAX_ACTIVE_SUBS", 25)),
         db_path=os.environ.get("DB_PATH", "bot.db"),
         port=int(os.environ.get("PORT", 8080)),
         base_url=base_url.rstrip("/"),

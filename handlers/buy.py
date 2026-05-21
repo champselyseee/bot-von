@@ -200,7 +200,21 @@ async def provision_after_payment(config, vpn, bot, tg_id: int, user_id: int, pl
         except Exception as e:
             log.warning("Cannot notify user %s: %s", tg_id, e)
     else:
-        # New subscription
+        # New subscription — check capacity first
+        if await db.count_active_subs(config.db_path) >= config.max_active_subs:
+            log.warning("Capacity limit reached, cannot provision tg_id=%s", tg_id)
+            try:
+                await bot.send_message(
+                    tg_id,
+                    "😔 Оплата прошла, но сейчас все места заняты.\n"
+                    "Напиши в поддержку — вернём деньги или добавим вручную: @champselyseee",
+                )
+            except Exception:
+                pass
+            # Don't mark payment succeeded — leave as processing so admin can handle manually
+            await db.set_payment_status(config.db_path, yookassa_id, "pending")
+            return
+
         sub_id = secrets.token_hex(8)
         email = f"tg{tg_id}"
         password = secrets.token_urlsafe(20)
