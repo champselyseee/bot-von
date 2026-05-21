@@ -9,3 +9,5 @@ __pycache__/
 .claude/
 PROJECT_NOTES.txt
 SKILL.md
+*.PNG
+happ_split_tunneling.txt
