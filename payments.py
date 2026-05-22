@@ -38,7 +38,7 @@ class YooKassaClient:
                 f"{_BASE}/payments",
                 json=payload,
                 auth=self._auth,
-                headers={"Idempotency-Key": str(uuid.uuid4())},
+                headers={"Idempotence-Key": str(uuid.uuid4())},
             )
             if r.is_error:
                 log.error("YooKassa %s error body: %s", r.status_code, r.text)
