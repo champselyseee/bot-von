@@ -40,6 +40,8 @@ class YooKassaClient:
                 auth=self._auth,
                 headers={"Idempotency-Key": str(uuid.uuid4())},
             )
+            if r.is_error:
+                log.error("YooKassa %s error body: %s", r.status_code, r.text)
             r.raise_for_status()
             data = r.json()
             return data["id"], data["confirmation"]["confirmation_url"]
