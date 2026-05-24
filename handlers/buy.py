@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.filters import Command
 
 import db
-from keyboards import plan_keyboard, payment_keyboard, back_to_menu
+from keyboards import plan_keyboard, payment_keyboard, back_to_menu, connect_keyboard
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -193,9 +193,9 @@ async def provision_after_payment(config, vpn, bot, tg_id: int, user_id: int, pl
                 tg_id,
                 f"✅ <b>Подписка продлена!</b>\n\n"
                 f"Тариф: {config.plan_label(plan)}\n"
-                f"Активна до: <b>{exp_str}</b>\n\n"
-                f"📲 <a href='{connect_url}'>Инструкция по подключению</a>",
+                f"Активна до: <b>{exp_str}</b>",
                 parse_mode="HTML",
+                reply_markup=connect_keyboard(connect_url),
             )
         except Exception as e:
             log.warning("Cannot notify user %s: %s", tg_id, e)
@@ -250,10 +250,9 @@ async def provision_after_payment(config, vpn, bot, tg_id: int, user_id: int, pl
                 f"🎉 <b>Доступ к Camille VPN открыт!</b>\n\n"
                 f"Тариф: {config.plan_label(plan)}\n"
                 f"Активна до: <b>{exp_str}</b>\n\n"
-                f"📲 <a href='{connect_url}'>Инструкция по подключению</a>\n\n"
-                f"<i>Ссылка ведёт на страницу с кнопкой «Добавить в Happ».\n"
-                f"Открой её в Safari (не в браузере Telegram).</i>",
+                f"<i>Нажми кнопку ниже, чтобы открыть страницу подключения в Safari.</i>",
                 parse_mode="HTML",
+                reply_markup=connect_keyboard(connect_url),
             )
         except Exception as e:
             log.warning("Cannot notify user %s: %s", tg_id, e)

@@ -41,15 +41,12 @@ async def cb_profile(callback: CallbackQuery, config, **_):
             f"📱 <b>Моя подписка</b>\n\n"
             f"Статус: ✅ Активна\n"
             f"Тариф: {plan_label}\n"
-            f"До: <b>{exp}</b>\n\n"
-            f"📲 <b>Страница подключения</b> (открой в Safari):\n"
-            f"<a href='{connect_url}'>{connect_url}</a>"
+            f"До: <b>{exp}</b>"
         )
         await callback.message.edit_text(
             text,
-            reply_markup=profile_keyboard(True),
+            reply_markup=profile_keyboard(True, connect_url=connect_url),
             parse_mode="HTML",
-            disable_web_page_preview=True,
         )
 
     await callback.answer()

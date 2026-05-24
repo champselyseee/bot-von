@@ -26,13 +26,21 @@ def payment_keyboard(url: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def profile_keyboard(has_sub: bool) -> InlineKeyboardMarkup:
+def profile_keyboard(has_sub: bool, connect_url: str | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if has_sub:
+        if connect_url:
+            kb.row(InlineKeyboardButton(text="📲 Подключить VPN", url=connect_url))
         kb.row(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="buy"))
     else:
         kb.row(InlineKeyboardButton(text="💳 Купить VPN", callback_data="buy"))
     kb.row(InlineKeyboardButton(text="◀️ Назад", callback_data="menu"))
+    return kb.as_markup()
+
+
+def connect_keyboard(connect_url: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="📲 Подключить VPN", url=connect_url))
     return kb.as_markup()
 
 
